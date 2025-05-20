@@ -11,3 +11,33 @@ Please especially pay attention to the information provided in the documentation
 - Device compatibility
 - Prerequisites
 - Important notes
+
+
+## Setup
+Follow these steps to set up the project locally:
+1. Clone the repository
+
+git clone https://github.com/getaireu/REST-API
+cd REST-API
+
+2. Create and activate a virtual environment
+On Linux / macOS:
+
+python3 -m venv venv
+source venv/bin/activate
+
+On Windows (CMD):
+
+python -m venv venv
+venv\Scripts\activate
+
+On Windows (PowerShell):
+
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+
+3. Install dependencies
+
+pip install -r requirements.txt
+
+4. Rename the file .credentials.template to .credentials and insert your email and passphrase
