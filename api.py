@@ -59,10 +59,11 @@ class API:
         """
         self.AUTO_RECONNECT = True
         self._credentials_path = credentials_path
-        self._session_token = None
+        self._refresh_token = None
         self._api_token = None
         self._auth_url = None
         self._api_url = None
+        self._client_id = None
         self._devices = []
 
         self._logger = logging.getLogger("CC-API").getChild("API")
@@ -91,62 +92,78 @@ class API:
                         return {}
                 self._auth_url = credentials['auth_url']
                 self._api_url = credentials['api_url']
+                self._client_id = credentials['client_id']
                 return credentials
         except (FileNotFoundError, json.JSONDecodeError) as e:
             self._logger.error(f"Can't load credentials: {e}")
             return {}
 
-    def _get_session_token(self:API) -> str | None:
+    def _get_api_token(self:API) -> str | None:
         """
-        Retrieve a session token by sending authentication credentials to the server.
+        Retrieve a api token by sending authentication credentials to the server.
 
-        :return: Session token if successful, otherwise None.
+        :return: api token if successful, otherwise None.
         """
 
         credentials = self._load_credentials()
 
-        payload = {"username": credentials['username'], "password": credentials['password']}
         headers = {'Content-Type': 'application/json'}
+        payload = {
+            "grant_type": "password",
+            "username": credentials['username'],
+            "password": credentials['password'],
+            "client_id": self._client_id,
+            "scope": 'openid profile offline_access',
+            }
 
         try:
             response = requests.post(f"{self._auth_url}",
                                      data=json.dumps(payload), headers=headers)
             if response.status_code == ResponseCode.OK:
                 response_data = response.json()
-                if response_data.get('status') == 'SUCCESS':
-                    self._session_token = response_data['sessionToken']
-                    return self._session_token
+                if response_data.get("refresh_token"):
+                    self._refresh_token = response_data["refresh_token"]
+                if response_data.get('access_token'):
+                    self._api_token = response_data['access_token']
+                    return self._api_token
                 else:
-                    print("Authentication failed:", response_data.get('status'))
+                    self._logger.error("Authentication failed:", response_data.get('status'))
             else:
-                print(f"Error: {ResponseCode.description(response.status_code)}")
+                self._logger.error(f"Error: {ResponseCode.description(response.status_code)} | {response.text}")
         except requests.RequestException as e:
-            print(f"Request error: {e}")
+            self._logger.debug(f"Request error: {e}")
         return None
 
-    def _get_api_token(self:API):
+    def _refresh_api_token(self:API) -> str | None:
         """
-        Retrieve an api token by sending a session token to the server.
+        Refresh an api token by sending authentication credentials to the server.
 
-        :return: API token if successful, otherwise None.
+        :return: api token if successful, otherwise None.
         """
-        params = {'issuer': 'GETAIR_API','sessionToken': self._session_token}
+
+
         headers = {'Content-Type': 'application/json'}
+        payload = {
+            "grant_type": "refresh_token",
+            "refresh_token": self._refresh_token,
+            "client_id": self._client_id,
+            "scope": 'openid profile offline_access',
+        }
 
         try:
-            response = requests.get(f'{self._api_url + "iam/token/"}', params=params, headers=headers)
-
+            response = requests.post(f"{self._auth_url}",
+                                     data=json.dumps(payload), headers=headers)
             if response.status_code == ResponseCode.OK:
                 response_data = response.json()
-                if response_data.get('token'):
-                    self._api_token = response_data['token']
-                    return self._session_token
+                if response_data.get('access_token'):
+                    self._api_token = response_data['access_token']
+                    return self._api_token
                 else:
-                    print("Authentication failed:", response_data.get('status'))
+                    self._logger.error("Refresh api token failed:", response_data.get('status'))
             else:
-                print(f"Error: {ResponseCode.description(response.status_code)}")
+                self._logger.error(f"Error: {ResponseCode.description(response.status_code)} | {response.text}")
         except requests.RequestException as e:
-            print(f"Request error: {e}")
+            self._logger.debug(f"Request error: {e}")
         return None
 
     def _request_get(self:API,path:str="") -> Any | None:
@@ -210,7 +227,7 @@ class API:
         """
         if not self:
             return API().connect()
-        if not self._get_session_token() or not self._get_api_token():
+        if not self._refresh_api_token() and not self._get_api_token():
             self._logger.info("Unable to connect.")
             return None
         return self
@@ -248,11 +265,15 @@ class API:
         :return: Device object
         """
         deviceID = deviceID.replace(":","").upper()
-        for device in self.get_devices():
+        for device in self._devices:
             if device.device_id == deviceID:
                 return device
-        self._logger.info(f"Could not find device {deviceID}")
-        return None
+        
+        device = Device(device_id=deviceID,api=self)
+
+        self._devices.append(device)
+
+        return device
 
 
 class Device:
