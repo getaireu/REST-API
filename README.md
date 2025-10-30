@@ -24,6 +24,7 @@ cd REST-API
 On Linux / macOS:
 
 python3 -m venv venv
+
 source venv/bin/activate
 
 On Windows (CMD):
