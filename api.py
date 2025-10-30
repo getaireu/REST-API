@@ -353,9 +353,10 @@ class Device:
         self.AUTOSET = False
 
         self._system = Device._System()
-        self._zone = Device._Zone()
+        self._zones = {1:None,2:None,3:None}
         self._system_changed = {}
-        self._zone_changed = {}
+        self._zones_changed = {1:{},2:{},3:{}}
+        self._zone_select = 1
 
         self._system.system_id = {'type':'Buffer','data':[int(device_id[i:i+2],16) for i in range(0,len(device_id),2)]}
         self._api = api if api else API()
@@ -385,19 +386,24 @@ class Device:
                     self._logger.warning(f"Can't update value {key}. {e}")
                     return False
 
-            zone_data = self._api._request_get(f"devices/1.{self.device_id}/services/Zone")
-            if not zone_data:
-                self._logger.debug("Empty Zone data")
-                return False
-
-            for attr in self._zone.__dict__:
-                key = attr.replace("_","-")
-                try:
-                    if key in zone_data:
-                        self._zone.__setattr__(attr,zone_data[key])
-                except Exception as e:
-                    self._logger.warning(f"Can't update value {key}. {e}")
+            for i in [1] if not self._is_system_type_schub() else range(1,4):
+                
+                zone_data = self._api._request_get(f"devices/{i}.{self.device_id}/services/Zone")
+                if not zone_data:
+                    self._logger.debug("Empty Zone data")
                     return False
+                
+                if not self._zones[i]:
+                    self._zones[i] = Device._Zone()
+
+                for attr in self._zones[i].__dict__:
+                    key = attr.replace("_","-")
+                    try:
+                        if key in zone_data:
+                            self._zones[i].__setattr__(attr,zone_data[key])
+                    except Exception as e:
+                        self._logger.warning(f"Can't update value {key}. {e}")
+                        return False
 
         except Exception as e:
             self._logger.error(f"Error on updating values. {e}")
@@ -415,9 +421,10 @@ class Device:
             if len(self._system_changed):
                 resp1 = self._api._request_put(f"devices/{self.device_id}/services/System",self._system_changed)
                 self._system_changed.clear()
-            if len(self._zone_changed):
-                resp2 = self._api._request_put(f"devices/{self.device_id}/services/Zone",self._zone_changed)
-                self._zone_changed.clear()
+            for i in range(1,4):
+                if len(self._zones_changed[i]):
+                    resp2 = self._api._request_put(f"devices/{i}.{self.device_id}/services/Zone",self._zones_changed[i])
+                    self._zones_changed[i].clear()
         except Exception as e:
             self._logger.error(f"Error on pushing values. {e}")
             return False
@@ -445,12 +452,30 @@ class Device:
         :return: A dictionary with 'System' and 'Zone' keys containing 
                 the respective attributes and their values.
         """
-        res = {"System":{},"Zone":{}}
+        res = {"System":{}}
         for attr in self._system.__dict__:
             res["System"][attr] = getattr(self._system,attr)
-        for attr in self._zone.__dict__:
-            res["Zone"][attr] = getattr(self._zone,attr)
+        for i in range(4):
+            if not self._zones[i]:
+                continue
+            res[f"Zone {i}"] = {}
+            for attr in self._zones[i].__dict__:
+                res[f"Zone {i}"][attr] = getattr(self._zones[i],attr)
         return res
+
+    def select_zone(self: Device, zone_index: int) -> bool:
+        """
+        Select a specific zone for subsequent operations. Only available for SCHub devices.
+
+        :param zone_index: Index of the zone to select.
+        :return: True if the zone was successfully selected, False if the zone is not connected.
+        """
+        if not self._zones[zone_index]:
+            self._logger.error(f"Could not select zone {zone_index} because it is not connected")
+            return False
+
+        self._zone_select = zone_index
+        return True
 
     def _key_changed(self:Device, service: _System | _Zone, key: str,value) -> bool:
         """
@@ -464,13 +489,21 @@ class Device:
         if service == Device._System:
             self._system_changed[key] = value
         elif service == Device._Zone:
-            self._zone_changed[key] = value
+            self._zones_changed[self._zone_select][key] = value
         else:
             return False
         if self.AUTOSET:
             return self.push()
         return True
     
+    def _is_system_type_schub(self: Device) -> bool:
+        """
+        Check if the system type is one of the SCHub variants.
+
+        :return: True if the system type is 'SCHub-SmartFan' or 'SCHub-EasyFan', False otherwise.
+        """
+        return self._system.system_type in ["SCHub-SmartFan", "SCHub-EasyFan"]
+
     @property
     def device_id(self: Device) -> str:
         """
@@ -519,7 +552,7 @@ class Device:
 
         :return: Runtime in hours.
         """
-        return self._zone.runtime
+        return self._zones[self._zone_select].runtime
 
     @property
     def name(self: Device) -> str:
@@ -528,7 +561,7 @@ class Device:
 
         :return: Zone name as a string.
         """
-        return self._zone.name
+        return self._zones[self._zone_select].name
     
     @name.setter
     def name(self: Device, value: str):
@@ -537,7 +570,7 @@ class Device:
 
         :param value: Zone name (max 64 characters).
         """
-        self._zone.name = value
+        self._zones[self._zone_select].name = value
         self._key_changed(Device._Zone, "name", value)
 
     @property
@@ -565,7 +598,7 @@ class Device:
 
         :return: Humidity percentage.
         """
-        return self._zone.humidity
+        return self._zones[self._zone_select].humidity
 
     @property
     def temperature(self: Device) -> float:
@@ -574,7 +607,7 @@ class Device:
 
         :return: Temperature in °C.
         """
-        return self._zone.temperature
+        return self._zones[self._zone_select].temperature
 
     @property
     def outdoor_humidity(self: Device) -> float:
@@ -583,7 +616,7 @@ class Device:
 
         :return: Humidity percentage.
         """
-        return self._zone.hmdty_outdoors
+        return self._zones[self._zone_select].hmdty_outdoors
 
     @property
     def outdoor_temperature(self: Device) -> float:
@@ -592,7 +625,7 @@ class Device:
 
         :return: Temperature in °C.
         """
-        return self._zone.temp_outdoors
+        return self._zones[self._zone_select].temp_outdoors
  
     @property
     def indoor_humidity(self: Device) -> int:
@@ -619,7 +652,7 @@ class Device:
 
         :return: Speed level as a float (e.g., 0.0 to 4.0).
         """
-        return self._zone.speed
+        return self._zones[self._zone_select].speed
         
     @speed.setter
     def speed(self: Device, value):
@@ -628,7 +661,7 @@ class Device:
 
         :param value: Speed level (0 to 4).
         """
-        self._zone.speed = value
+        self._zones[self._zone_select].speed = value
         self._key_changed(Device._Zone, "speed", value)
 
     @property
@@ -638,7 +671,7 @@ class Device:
 
         :return: Mode as a string.
         """
-        return self._zone.mode
+        return self._zones[self._zone_select].mode
         
     @mode.setter
     def mode(self: Device, value: str):
@@ -647,7 +680,7 @@ class Device:
 
         :param value: One of 'ventilate', 'ventilate_hr', 'ventilate_inv', 'night', 'auto', or 'rush'.
         """
-        self._zone.mode = value
+        self._zones[self._zone_select].mode = value
         self._key_changed(Device._Zone, "mode", value)
 
     @property
@@ -657,7 +690,7 @@ class Device:
 
         :return: Unix timestamp (in seconds).
         """
-        return self._zone.mode_deadline
+        return self._zones[self._zone_select].mode_deadline
     
     @mode_deadline.setter
     def mode_deadline(self: Device, value: int):
@@ -666,7 +699,7 @@ class Device:
 
         :param value: Unix timestamp (in seconds).
         """
-        self._zone.mode_deadline = value
+        self._zones[self._zone_select].mode_deadline = value
         self._key_changed(Device._Zone, "mode-deadline", value)
 
     @property
@@ -676,7 +709,7 @@ class Device:
 
         :return: Target temperature in °C.
         """
-        return self._zone.target_temp
+        return self._zones[self._zone_select].target_temp
     
     @target_temp.setter
     def target_temp(self: Device, value: float):
@@ -685,7 +718,7 @@ class Device:
 
         :param value: Desired temperature in °C.
         """
-        self._zone.target_temp = value
+        self._zones[self._zone_select].target_temp = value
         self._key_changed(Device._Zone, "target-temp", value)
 
     @property
@@ -695,7 +728,7 @@ class Device:
 
         :return: Humidity level setting as a string.
         """
-        return self._zone.target_hmdty_level
+        return self._zones[self._zone_select].target_hmdty_level
 
     @target_hmdty_level.setter
     def target_hmdty_level(self: Device, value: str):
@@ -705,7 +738,7 @@ class Device:
 
         :param value: One of 'thirty-fifty', 'fourty-sixty', or 'fifty-seventy'.
         """
-        self._zone.target_hmdty_level = value
+        self._zones[self._zone_select].target_hmdty_level = value
         self._key_changed(Device._Zone, "target-hmdty-level", value)
 
     @property
@@ -715,7 +748,7 @@ class Device:
 
         :return: True if enabled, False otherwise.
         """
-        return self._zone.auto_mode_voc
+        return self._zones[self._zone_select].auto_mode_voc
         
     @auto_mode_voc.setter
     def auto_mode_voc(self: Device, value: bool):
@@ -724,7 +757,7 @@ class Device:
 
         :param value: True to enable, False to disable.
         """
-        self._zone.auto_mode_voc = value
+        self._zones[self._zone_select].auto_mode_voc = value
         self._key_changed(Device._Zone, "auto-mode-voc", value)
 
     @property
@@ -734,7 +767,7 @@ class Device:
 
         :return: True if silent mode is enabled, False otherwise.
         """
-        return self._zone.auto_mode_silent
+        return self._zones[self._zone_select].auto_mode_silent
     
     @auto_mode_silent.setter
     def auto_mode_silent(self: Device, value: bool):
@@ -743,7 +776,7 @@ class Device:
 
         :param value: True to enable silent mode, False to disable.
         """
-        self._zone.auto_mode_silent = value
+        self._zones[self._zone_select].auto_mode_silent = value
         self._key_changed(Device._Zone, "auto-mode-silent", value)
 
     @property
@@ -753,7 +786,7 @@ class Device:
 
         :return: Profile ID (0 = inactive, 1–10 = active profile).
         """
-        return self._zone.time_profile
+        return self._zones[self._zone_select].time_profile
     
     @active_time_profile.setter
     def active_time_profile(self: Device, value: int):
@@ -762,7 +795,7 @@ class Device:
 
         :param value: 0 to deactivate, or 1–10 to select a profile.
         """
-        self._zone.time_profile = value
+        self._zones[self._zone_select].time_profile = value
         self._key_changed(Device._Zone, "time-profile", value)
 
     @property
@@ -772,7 +805,7 @@ class Device:
 
         :return: runtime in hour
         """
-        return self._zone.last_filter_change
+        return self._zones[self._zone_select].last_filter_change
     
     @last_filter_change.setter
     def last_filter_change(self: Device, value: int):
@@ -781,7 +814,7 @@ class Device:
 
         :param value: Unix timestamp (in seconds).
         """
-        self._zone.last_filter_change = value
+        self._zones[self._zone_select].last_filter_change = value
         self._key_changed(Device._Zone, "last-filter-change", value)
 
     def get_time_profile_name(self:Device,number: int) -> str:
