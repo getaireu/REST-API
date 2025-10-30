@@ -1,6 +1,7 @@
 from __future__ import annotations
 from enum import IntEnum
 from typing import Any
+from urllib.parse import urljoin
 
 import requests
 import json
@@ -63,6 +64,7 @@ class API:
         self._api_token = None
         self._auth_url = None
         self._api_url = None
+        self._api_url_v1 = None
         self._client_id = None
         self._devices = []
 
@@ -86,12 +88,13 @@ class API:
         try:
             with open(self._credentials_path, "r") as file:
                 credentials = json.load(file)
-                for key in ['auth_url','api_url','username','password']:
+                for key in ['auth_url','api_url','username','password','client_id']:
                     if key not in credentials.keys():
                         self._logger.error(f"Key {key} not found in credentials")
                         return {}
                 self._auth_url = credentials['auth_url']
                 self._api_url = credentials['api_url']
+                self._api_url_v1 = urljoin(self._api_url,"api/v1/")
                 self._client_id = credentials['client_id']
                 return credentials
         except (FileNotFoundError, json.JSONDecodeError) as e:
@@ -113,11 +116,11 @@ class API:
             "username": credentials['username'],
             "password": credentials['password'],
             "client_id": self._client_id,
-            "scope": 'openid profile offline_access',
+            "scope": 'offline_access',
             }
 
         try:
-            response = requests.post(f"{self._auth_url}",
+            response = requests.post(f"{urljoin(self._auth_url,"oauth/token")}",
                                      data=json.dumps(payload), headers=headers)
             if response.status_code == ResponseCode.OK:
                 response_data = response.json()
@@ -147,11 +150,11 @@ class API:
             "grant_type": "refresh_token",
             "refresh_token": self._refresh_token,
             "client_id": self._client_id,
-            "scope": 'openid profile offline_access',
+            "scope": 'offline_access',
         }
 
         try:
-            response = requests.post(f"{self._auth_url}",
+            response = requests.post(f"{urljoin(self._auth_url,"oauth/token")}",
                                      data=json.dumps(payload), headers=headers)
             if response.status_code == ResponseCode.OK:
                 response_data = response.json()
@@ -175,7 +178,7 @@ class API:
         """
         try:
             headers = {'Authorization': f'Bearer {self._api_token}','Content-Type': 'application/json'}
-            response = requests.get(f'{self._api_url}{path}', headers=headers)
+            response = requests.get(f"{urljoin(self._api_url_v1,path)}", headers=headers)
             if response.status_code == ResponseCode.OK:
                 self._logger.debug("Get request succeeded")
                 return response.json()
@@ -201,7 +204,7 @@ class API:
         try:
             headers = {'Authorization': f'Bearer {self._api_token}','Content-Type': 'application/json'}
             payload = json.dumps(data)
-            response = requests.put(f'{self._api_url}{path}', data=payload, headers=headers)
+            response = requests.put(f"{urljoin(self._api_url_v1,path)}", data=payload, headers=headers)
             if response.status_code == ResponseCode.OK:
                 self._logger.debug("Put request succeeded")
                 return response.json()
@@ -428,7 +431,12 @@ class Device:
 
         :return: True if the update was successful, False otherwise.
         """
-        return self.push() and self.fetch()
+
+        if not self.push() and self.fetch():
+            self._logger.info("Updating of device values was not successful.")
+            return False
+        return True
+
 
     def json(self:Device) -> dict[str,dict]:
         """
@@ -830,11 +838,4 @@ class Device:
             self._logger.warning("The length of the list must be a multiple of four")
         self._system.__setattr__(f"time_profile_{number}_data",{"type":"Buffer","data":value})
         self._key_changed(Device._System,f"time_profile_{number}_data",{"type":"Buffer","data":value})
-
-
-# Example usage
-if __name__ == "__main__":
-    # Initialize API and authenticate
-    api = API.connect()
-
-    
+ 
